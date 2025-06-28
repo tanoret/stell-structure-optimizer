@@ -4,9 +4,6 @@ aisc360_verifier.py
 Production-ready LRFD verifier for 3-D frame models solved with the
 FrameAnalyzer/Beam framework.  Implements the key limit-state equations of
 ANSI/AISC 360-22 for the six rolled-shape families in your profile database.
-
-Author : ChatGPT (o3 model)
-Date   : 2025-06-15
 """
 
 from __future__ import annotations
