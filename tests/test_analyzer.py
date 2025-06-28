@@ -4,8 +4,8 @@ import unittest
 import numpy as np
 
 # Import the classes from your new structure
-from structural_model import Node, Beam
-from frame_analyzer import FrameAnalyzer
+from stell_structure_optimizer.analysis.structural_model import Node, Beam
+from stell_structure_optimizer.analysis.frame_analyzer import FrameAnalyzer
 
 class TestFrameAnalyzer(unittest.TestCase):
     """Unit tests for the core calculation methods in FrameAnalyzer."""
@@ -13,7 +13,7 @@ class TestFrameAnalyzer(unittest.TestCase):
     def setUp(self):
         """Set up a simple model to be used by all tests."""
         self.nodes = [Node(0, 0, 0), Node(1, 0, 0)]
-        self.beams = [Beam(0, 1, E=1.0, A=1.0, Iy=1.0, Iz=1.0, J=1.0, cy=0.5, cz=0.5)]
+        self.beams = [Beam(0, 1, E=1.0, nu=0.3, rho=1.0, A=1.0, Iy=1.0, Iz=1.0, J=1.0, cy=0.5, cz=0.5)]
         self.analyzer = FrameAnalyzer(self.nodes, self.beams, [])
         # Manually run compute_beam_properties to set length etc. for the test beam
         self.analyzer._compute_beam_properties(self.beams[0])
@@ -21,7 +21,7 @@ class TestFrameAnalyzer(unittest.TestCase):
     def test_compute_beam_properties(self):
         """Test the calculation of beam length and rotation matrix."""
         nodes = [Node(0, 0, 0), Node(3, 4, 0)]
-        beam = Beam(0, 1, E=1, A=1, Iy=1, Iz=1, J=1, cy=1, cz=1)
+        beam = Beam(0, 1, E=1, nu=0.3, rho=1.0, A=1, Iy=1, Iz=1, J=1, cy=1, cz=1)
         analyzer = FrameAnalyzer(nodes, [beam], [])
         analyzer._compute_beam_properties(beam)
 
