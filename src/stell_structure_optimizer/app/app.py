@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from plotly.colors import qualitative
 import pickle
 from itertools import combinations, product
 from pathlib import Path
@@ -487,40 +488,291 @@ def draw_main_content():
 
     with tab1:
         st.subheader("Interactive 3D Model")
+
+        show_annotations = st.checkbox("Show Details & Annotations", value=True)
+
         if not st.session_state.model_defined:
             st.info("Define a model using the sidebar controls to visualize it here.")
+
         else:
+            # ------------------------------------------------------------------
+            # figure container --------------------------------------------------
+            # ------------------------------------------------------------------
             fig = go.Figure()
+
+            # ------------------------------------------------------------------
+            # scale-dependent arrow size (use 5 % of the longest beam) ----------
+            # ------------------------------------------------------------------
+            base_arrow_size = 1.0
+            if st.session_state.beams:
+                beam_lengths = [b.length for b in st.session_state.beams
+                                if hasattr(b, "length") and b.length is not None]
+                if beam_lengths:
+                    max_beam_length = max(beam_lengths)
+                    base_arrow_size = 1.0 if max_beam_length == 0 else max_beam_length / 10.0
+
+            # ------------------------------------------------------------------
+            # attempt to compute local axes for each beam -----------------------
+            # ------------------------------------------------------------------
+            advanced_visuals_possible = False
+            if st.session_state.beams:
+                try:
+                    tmp = FrameAnalyzer(st.session_state.nodes,
+                                        st.session_state.beams, [])
+                    for b in st.session_state.beams:
+                        tmp._compute_beam_properties(b)
+                    advanced_visuals_possible = True
+                except Exception:
+                    st.warning("Could not render advanced visuals "
+                            "(orientation/loads). Model may be incomplete.")
+
+            # ------------------------------------------------------------------
+            # node coordinates as (X, Y, Z) ------------------------------------
+            # ------------------------------------------------------------------
             node_xyz = np.array([[n.x, n.y, n.z] for n in st.session_state.nodes])
-            fig.add_trace(go.Scatter3d(
-                x=node_xyz[:, 0], y=node_xyz[:, 2], z=node_xyz[:, 1],
-                mode='markers+text',
-                text=[str(i) for i in range(len(st.session_state.nodes))],
-                marker=dict(size=5, color='blue'),
-                name='Nodes',
-                hoverinfo='text'
-            ))
-            for beam in st.session_state.beams:
+
+            # ------------------------------------------------------------------
+            # plot nodes -------------------------------------------------------
+            # ------------------------------------------------------------------
+            node_mode = "markers+text" if show_annotations else "markers"
+            fig.add_trace(
+                go.Scatter3d(
+                    x=node_xyz[:, 0],          # X
+                    y=node_xyz[:, 2],          # Z → plotly-Y
+                    z=node_xyz[:, 1],          # Y → plotly-Z (elevation)
+                    mode=node_mode,
+                    text=[f"{i}" for i in range(len(st.session_state.nodes))],
+                    marker=dict(size=5, color="blue"),
+                    textfont=dict(size=10, color="darkblue"),
+                    name="Nodes",
+                    hoverinfo="text",
+                    showlegend=False,
+                )
+            )
+
+            # ------------------------------------------------------------------
+            # plot beams -------------------------------------------------------
+            # ------------------------------------------------------------------
+            beam_mid_xyz, beam_labels = [], []
+            for idx, beam in enumerate(st.session_state.beams):
                 n1 = st.session_state.nodes[beam.node1_idx]
                 n2 = st.session_state.nodes[beam.node2_idx]
-                fig.add_trace(go.Scatter3d(
-                    x=[n1.x, n2.x], y=[n1.z, n2.z], z=[n1.y, n2.y],
-                    mode='lines',
-                    line=dict(color='black', width=4),
-                    name=f'Beam {beam.node1_idx}-{beam.node2_idx}',
-                    hoverinfo='name'
-                ))
+
+                # beam centre line
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=[n1.x, n2.x],
+                        y=[n1.z, n2.z],
+                        z=[n1.y, n2.y],
+                        mode="lines",
+                        line=dict(color="black", width=4),
+                        hoverinfo="name",
+                        name=f"Beam {beam.node1_idx}-{beam.node2_idx}",
+                        showlegend=False,
+                    )
+                )
+
+                # keep mid-points for labels
+                if show_annotations:
+                    mid = (node_xyz[beam.node1_idx] + node_xyz[beam.node2_idx]) / 2
+                    beam_mid_xyz.append(mid)
+                    beam_labels.append(f"B{idx}")
+
+            # beam labels
+            if show_annotations and beam_mid_xyz:
+                mid_arr = np.array(beam_mid_xyz)
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=mid_arr[:, 0],
+                        y=mid_arr[:, 2],
+                        z=mid_arr[:, 1],
+                        mode="text",
+                        text=beam_labels,
+                        textfont=dict(color="purple", size=9),
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+
+            # ------------------------------------------------------------------
+            # fixed supports ---------------------------------------------------
+            # ------------------------------------------------------------------
+            if show_annotations and st.session_state.boundary_conditions:
+                support_nodes = {bc["node_idx"]
+                                for bc in st.session_state.boundary_conditions}
+                V = base_arrow_size * 1.5
+                H = base_arrow_size * 0.75
+                legend_added = False
+
+                for idx in support_nodes:
+                    x, y, z = node_xyz[idx]
+                    base = (x, y - V, z)
+                    x_arm = [(x - H, base[1], z), (x + H, base[1], z)]
+                    z_arm = [(x, base[1], z - H), (x, base[1], z + H)]
+
+                    for pts in [[(x, y, z), base], x_arm, z_arm]:
+                        p0, p1 = pts
+                        fig.add_trace(
+                            go.Scatter3d(
+                                x=[p0[0], p1[0]],
+                                y=[p0[2], p1[2]],
+                                z=[p0[1], p1[1]],
+                                mode="lines",
+                                line=dict(color="red", width=8),
+                                name="Fixed Supports",
+                                legendgroup="Fixed Supports",
+                                showlegend=not legend_added,
+                                hoverinfo="name",
+                            )
+                        )
+                    legend_added = True
+
+            # ------------------------------------------------------------------
+            # section major-axis arrows ---------------------------------------
+            # ------------------------------------------------------------------
+            if show_annotations and advanced_visuals_possible:
+                L = base_arrow_size
+                ez_local = np.array([0, 0, 1])   # local +Z
+                for beam in st.session_state.beams:
+                    if not hasattr(beam, "rotation_matrix"):
+                        continue
+                    mid = (node_xyz[beam.node1_idx] + node_xyz[beam.node2_idx]) / 2
+                    ez_global = beam.rotation_matrix.T @ ez_local
+                    u, v, w = ez_global[0], ez_global[2], ez_global[1]
+                    fig.add_trace(
+                        go.Cone(
+                            x=[mid[0]], y=[mid[2]], z=[mid[1]],
+                            u=[u * L], v=[v * L], w=[w * L],
+                            showscale=False,
+                            colorscale=[[0, "grey"], [1, "grey"]],
+                            name="Major Axis",
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
+                    )
+
+            # ------------------------------------------------------------------
+            # loads (if any) ---------------------------------------------------
+            # ------------------------------------------------------------------
+            if show_annotations and advanced_visuals_possible and st.session_state.loads:
+
+                colors = qualitative.Plotly
+                L_load = base_arrow_size * 2.0
+                shown = set()
+
+                for i, pack in enumerate(st.session_state.loads):
+                    colour = colors[i % len(colors)]
+                    pname = pack.get("name", f"Load Pack {i + 1}")
+                    legend = pname not in shown
+
+                    # nodal loads
+                    if pack["type"] == "Nodal":
+                        for load in pack["data"]:
+                            pos = node_xyz[load["node_idx"]]
+                            F = np.array([load.get("Fx", 0),
+                                        load.get("Fy", 0),
+                                        load.get("Fz", 0)])
+                            mag = np.linalg.norm(F)
+                            if mag < 1e-6:
+                                continue
+                            dir_ = F / mag
+                            tail = pos - L_load * dir_
+                            u, v, w = pos - tail
+                            fig.add_trace(
+                                go.Cone(
+                                    x=[tail[0]], y=[tail[2]], z=[tail[1]],
+                                    u=[u], v=[v], w=[w],
+                                    showscale=False,
+                                    colorscale=[[0, colour], [1, colour]],
+                                    name=pname,
+                                    legendgroup=pname,
+                                    showlegend=legend,
+                                    hovertext=(f"<b>{pname}</b><br>"
+                                            f"Node {load['node_idx']}<br>"
+                                            f"Force: [{F[0]:.1f}, {F[1]:.1f}, {F[2]:.1f}] N"),
+                                    hoverinfo="text",
+                                )
+                            )
+                            shown.add(pname)
+
+                    # distributed loads
+                    elif pack["type"] == "Distributed":
+                        for load in pack["data"]:
+                            beam = st.session_state.beams[load["beam_idx"]]
+                            if not hasattr(beam, "rotation_matrix"):
+                                continue
+                            n1 = node_xyz[beam.node1_idx]
+                            n2 = node_xyz[beam.node2_idx]
+                            q_local = np.array([0,
+                                                load.get("qy", 0),
+                                                load.get("qz", 0)])
+                            if np.linalg.norm(q_local) < 1e-6:
+                                continue
+                            q_glob = beam.rotation_matrix.T @ q_local
+                            q_dir = q_glob / np.linalg.norm(q_glob)
+                            u, v, w = q_dir[0], q_dir[2], q_dir[1]
+                            for frac in (0.25, 0.5, 0.75):
+                                start = n1 + frac * (n2 - n1)
+                                fig.add_trace(
+                                    go.Cone(
+                                        x=[start[0]], y=[start[2]], z=[start[1]],
+                                        u=[u * L_load], v=[v * L_load], w=[w * L_load],
+                                        showscale=False,
+                                        colorscale=[[0, colour], [1, colour]],
+                                        name=pname,
+                                        legendgroup=pname,
+                                        showlegend=legend and frac == 0.25,
+                                        hovertext=(f"<b>{pname}</b><br>"
+                                                f"Beam {load['beam_idx']}<br>"
+                                                f"Dist. Load: "
+                                                f"[qy = {load.get('qy', 0):.1f}, "
+                                                f"qz = {load.get('qz', 0):.1f}] N/m"),
+                                        hoverinfo="text",
+                                    )
+                                )
+                            shown.add(pname)
+
+            # ------------------------------------------------------------------
+            # enforce a perfect 1 : 1 : 1 cube ---------------------------------
+            # ------------------------------------------------------------------
+            if node_xyz.size == 0:
+                xs = ys = zs = np.array([0.0])
+            else:
+                xs = node_xyz[:, 0]          # X
+                ys = node_xyz[:, 2]          # Z → plotly-Y
+                zs = node_xyz[:, 1]          # Y → plotly-Z
+
+            span_x, span_y, span_z = (np.ptp(xs), np.ptp(ys), np.ptp(zs))
+            cube = max(span_x, span_y, span_z) or 1.0e-6   # avoid /0 for single node
+            half = cube / 2.0
+
+            mid_x, mid_y, mid_z = xs.mean(), ys.mean(), zs.mean()
+            x_rng = [mid_x - half, mid_x + half]
+            y_rng = [mid_y - half, mid_y + half]
+            z_rng = [mid_z - half, mid_z + half]
+
+            # ------------------------------------------------------------------
+            # final layout -----------------------------------------------------
+            # ------------------------------------------------------------------
             fig.update_layout(
+                legend=dict(orientation="h",
+                            yanchor="bottom", y=1.02,
+                            xanchor="right", x=1),
                 scene=dict(
-                    xaxis_title='Global X (m)',
-                    yaxis_title='Global Z (m)',
-                    zaxis_title='Global Y (m)',
-                    aspectmode='data'
+                    aspectmode="manual",
+                    aspectratio=dict(x=1, y=1, z=1),
+                    xaxis=dict(range=x_rng, title="Global X (m)"),
+                    yaxis=dict(range=y_rng, title="Global Z (m)"),
+                    zaxis=dict(range=z_rng, title="Global Y (m) – Elevation"),
                 ),
-                showlegend=False,
+                showlegend=True,
                 margin=dict(l=0, r=0, b=0, t=40),
-                height=600
+                height=700,
             )
+
+            # ------------------------------------------------------------------
+            # render in Streamlit ---------------------------------------------
+            # ------------------------------------------------------------------
             st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
