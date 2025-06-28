@@ -8,7 +8,7 @@ from matplotlib.collections import LineCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 import matplotlib.colors as mcolors
 
-from frame_analyzer import FrameAnalyzer
+from ..analysis.frame_analyzer import FrameAnalyzer
 
 class Visualizer:
     """
