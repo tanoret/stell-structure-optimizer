@@ -22,5 +22,8 @@ dependencies = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.package-data]
+stell_structure_optimizer = ["data/*.pkl"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -7,6 +7,7 @@ from itertools import combinations, product
 from pathlib import Path
 import time
 import io
+from importlib import resources
 
 from stell_structure_optimizer.analysis.structural_model import Node, Beam, Connection
 from stell_structure_optimizer.data import profile_manager
@@ -39,13 +40,14 @@ if 'model_defined' not in st.session_state:
 
 # --- Data Loading ---
 @st.cache_data
-def load_profile_data(pickle_path):
+def load_profile_data(pickle_name: str):
+    """Load profile data bundled with the package."""
     try:
-        with open(pickle_path, "rb") as f:
+        with resources.open_binary("stell_structure_optimizer.data", pickle_name) as f:
             db = pickle.load(f)
-            profile_manager.populate_database(db)
-            profile_names = sorted(list(profile_manager.PROFILES_DATABASE.keys()))
-            return db, profile_names
+        profile_manager.populate_database(db)
+        profile_names = sorted(list(profile_manager.PROFILES_DATABASE.keys()))
+        return db, profile_names
     except FileNotFoundError:
         return None, []
 
@@ -973,7 +975,7 @@ def run_optimization():
 profile_db, profile_list = load_profile_data("profiles.pkl")
 
 if not profile_list:
-    st.error("Could not load `profiles.pkl`. Please ensure the file is in the same directory.")
+    st.error("Could not load `profiles.pkl`. Please reinstall the package or check the installation.")
 else:
     draw_sidebar()
     draw_main_content()
