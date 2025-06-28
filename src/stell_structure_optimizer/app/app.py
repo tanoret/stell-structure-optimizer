@@ -660,32 +660,40 @@ def draw_main_content():
                 L_load = base_arrow_size * 2.0
                 shown = set()
 
+                sep_ratio = -0.4
+
                 for i, pack in enumerate(st.session_state.loads):
                     colour = colors[i % len(colors)]
                     pname = pack.get("name", f"Load Pack {i + 1}")
                     legend = pname not in shown
 
-                    # nodal loads
+                    # ---------------------------------------------------------------
+                    # NODAL LOADS (tail moved by +sep along F̂)
+                    # ---------------------------------------------------------------
                     if pack["type"] == "Nodal":
                         for load in pack["data"]:
                             pos = node_xyz[load["node_idx"]]
-                            F = np.array([load.get("Fx", 0),
-                                        load.get("Fy", 0),
-                                        load.get("Fz", 0)])
+                            F   = np.array([load.get("Fx", 0),
+                                            load.get("Fy", 0),
+                                            load.get("Fz", 0)])
                             mag = np.linalg.norm(F)
                             if mag < 1e-6:
                                 continue
                             dir_ = F / mag
-                            tail = pos - L_load * dir_
-                            u, v, w = pos - tail
+
+                            sep  = sep_ratio * L_load
+                            tail = pos + dir_ * sep
+
+                            u = dir_[0] * L_load
+                            v = dir_[2] * L_load
+                            w = dir_[1] * L_load
                             fig.add_trace(
                                 go.Cone(
-                                    x=[tail[0]], y=[tail[2]], z=[tail[1]],
+                                    x=[tail[0]], y=[tail[2]], z=[tail[1]],   # shifted tail
                                     u=[u], v=[v], w=[w],
                                     showscale=False,
                                     colorscale=[[0, colour], [1, colour]],
-                                    name=pname,
-                                    legendgroup=pname,
+                                    name=pname, legendgroup=pname,
                                     showlegend=legend,
                                     hovertext=(f"<b>{pname}</b><br>"
                                             f"Node {load['node_idx']}<br>"
@@ -695,38 +703,48 @@ def draw_main_content():
                             )
                             shown.add(pname)
 
-                    # distributed loads
+                    # ---------------------------------------------------------------
+                    # DISTRIBUTED LOADS (tail moved by +sep along q̂)
+                    # ---------------------------------------------------------------
                     elif pack["type"] == "Distributed":
                         for load in pack["data"]:
                             beam = st.session_state.beams[load["beam_idx"]]
                             if not hasattr(beam, "rotation_matrix"):
                                 continue
+
                             n1 = node_xyz[beam.node1_idx]
                             n2 = node_xyz[beam.node2_idx]
+
                             q_local = np.array([0,
                                                 load.get("qy", 0),
                                                 load.get("qz", 0)])
                             if np.linalg.norm(q_local) < 1e-6:
                                 continue
                             q_glob = beam.rotation_matrix.T @ q_local
-                            q_dir = q_glob / np.linalg.norm(q_glob)
-                            u, v, w = q_dir[0], q_dir[2], q_dir[1]
+                            q_dir  = q_glob / np.linalg.norm(q_glob)
+
+                            u = q_dir[0] * L_load
+                            v = q_dir[2] * L_load
+                            w = q_dir[1] * L_load
+
+                            sep = sep_ratio * L_load   # same 15 % offset
+
                             for frac in (0.25, 0.5, 0.75):
-                                start = n1 + frac * (n2 - n1)
+                                base  = n1 + frac * (n2 - n1)   # original start
+                                tail  = base + q_dir * sep      # shifted tail
                                 fig.add_trace(
                                     go.Cone(
-                                        x=[start[0]], y=[start[2]], z=[start[1]],
-                                        u=[u * L_load], v=[v * L_load], w=[w * L_load],
+                                        x=[tail[0]], y=[tail[2]], z=[tail[1]],
+                                        u=[u], v=[v], w=[w],
                                         showscale=False,
                                         colorscale=[[0, colour], [1, colour]],
-                                        name=pname,
-                                        legendgroup=pname,
+                                        name=pname, legendgroup=pname,
                                         showlegend=legend and frac == 0.25,
                                         hovertext=(f"<b>{pname}</b><br>"
                                                 f"Beam {load['beam_idx']}<br>"
                                                 f"Dist. Load: "
-                                                f"[qy = {load.get('qy', 0):.1f}, "
-                                                f"qz = {load.get('qz', 0):.1f}] N/m"),
+                                                f"[qy={load.get('qy',0):.1f}, "
+                                                f"qz={load.get('qz',0):.1f}] N/m"),
                                         hoverinfo="text",
                                     )
                                 )
@@ -735,18 +753,34 @@ def draw_main_content():
             # ------------------------------------------------------------------
             # enforce a perfect 1 : 1 : 1 cube ---------------------------------
             # ------------------------------------------------------------------
-            if node_xyz.size == 0:
+            xs, ys, zs = [], [], []
+            for tr in fig.data:
+                if hasattr(tr, "x") and tr.x is not None:
+                    xs.extend(tr.x)
+                if hasattr(tr, "y") and tr.y is not None:
+                    ys.extend(tr.y)
+                if hasattr(tr, "z") and tr.z is not None:
+                    zs.extend(tr.z)
+
+                # for cones, also include the arrow tips (tail + vector)
+                if tr.type == "cone":
+                    if (tr.u is not None and tr.v is not None and tr.w is not None
+                            and tr.x is not None and tr.y is not None and tr.z is not None):
+                        xs.extend(np.array(tr.x) + np.array(tr.u))
+                        ys.extend(np.array(tr.y) + np.array(tr.v))
+                        zs.extend(np.array(tr.z) + np.array(tr.w))
+
+            xs, ys, zs = np.array(xs), np.array(ys), np.array(zs)
+
+            # fallback for an empty figure
+            if xs.size == 0:
                 xs = ys = zs = np.array([0.0])
-            else:
-                xs = node_xyz[:, 0]          # X
-                ys = node_xyz[:, 2]          # Z → plotly-Y
-                zs = node_xyz[:, 1]          # Y → plotly-Z
 
             span_x, span_y, span_z = (np.ptp(xs), np.ptp(ys), np.ptp(zs))
-            cube = max(span_x, span_y, span_z) or 1.0e-6   # avoid /0 for single node
-            half = cube / 2.0
-
+            cube = max(span_x, span_y, span_z) or 1.0e-6          # avoid /0
+            half = cube / 2.0 * 1.1
             mid_x, mid_y, mid_z = xs.mean(), ys.mean(), zs.mean()
+
             x_rng = [mid_x - half, mid_x + half]
             y_rng = [mid_y - half, mid_y + half]
             z_rng = [mid_z - half, mid_z + half]
@@ -755,9 +789,6 @@ def draw_main_content():
             # final layout -----------------------------------------------------
             # ------------------------------------------------------------------
             fig.update_layout(
-                legend=dict(orientation="h",
-                            yanchor="bottom", y=1.02,
-                            xanchor="right", x=1),
                 scene=dict(
                     aspectmode="manual",
                     aspectratio=dict(x=1, y=1, z=1),
@@ -765,6 +796,9 @@ def draw_main_content():
                     yaxis=dict(range=y_rng, title="Global Z (m)"),
                     zaxis=dict(range=z_rng, title="Global Y (m) – Elevation"),
                 ),
+                legend=dict(orientation="h",
+                            yanchor="bottom", y=1.02,
+                            xanchor="right", x=1),
                 showlegend=True,
                 margin=dict(l=0, r=0, b=0, t=40),
                 height=700,
