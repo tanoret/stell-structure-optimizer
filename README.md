@@ -35,7 +35,7 @@ Use Streamlit to start the app:
 streamlit run src/stell_structure_optimizer/app/app.py
 ```
 
-The application loads profile data from the `database/` directory and lets you build or import structural models for analysis.
+The application loads profile data bundled with the package (`profiles.pkl`) and lets you build or import structural models for analysis.
 
 ## Additional resources
 
