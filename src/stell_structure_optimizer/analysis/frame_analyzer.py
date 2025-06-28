@@ -15,7 +15,7 @@ from scipy.sparse import lil_matrix, csr_matrix
 from scipy.sparse.linalg import spsolve
 
 # Assumes the data model classes are in a separate file named `structural_model.py`
-from structural_model import Node, Beam, Connection
+from .structural_model import Node, Beam, Connection
 
 
 class _UnionFind:

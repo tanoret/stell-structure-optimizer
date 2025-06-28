@@ -8,11 +8,11 @@ from pathlib import Path
 import time
 import io
 
-from structural_model import Node, Beam, Connection
-import profile_manager
-from frame_analyzer import FrameAnalyzer
-from aisc360_verifier import AISC360Verifier
-from visaulizer_web_app import Visualizer
+from stell_structure_optimizer.analysis.structural_model import Node, Beam, Connection
+from stell_structure_optimizer.data import profile_manager
+from stell_structure_optimizer.analysis.frame_analyzer import FrameAnalyzer
+from stell_structure_optimizer.design.aisc360_verifier import AISC360Verifier
+from stell_structure_optimizer.visualization.visaulizer_web_app import Visualizer
 
 # --- Page Configuration ---
 st.set_page_config(
