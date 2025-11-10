@@ -89,9 +89,6 @@ def axial_strength(sec: SectionMeta, N: float,
     E, Fy, Fu, A = sec.E, sec.Fy, sec.Fu, sec.A
 
     # -------- COMPRESSION (E3) when N < 0.0 --------
-    print('Normal for testing: ', N)
-    print('Lx for testing: ', Lx)
-    print('Ly for testing: ', Ly)
     if N < 0.0:
         # default lengths if not provided
         Ldef = 1.0

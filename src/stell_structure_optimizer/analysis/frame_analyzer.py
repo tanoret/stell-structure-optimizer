@@ -173,7 +173,13 @@ class FrameAnalyzer:
         return T
 
     def _equivalent_nodal_loads(self, beam: Beam, q_local_y: float, q_local_z: float) -> np.ndarray:
-        """Calculates equivalent nodal loads (fixed-end actions) from distributed loads."""
+        """
+        Consistent local fixed-end actions for uniform loads qy (→ +local y) and qz (→ +local z).
+        Local DOF order: [u, v, w, θx, θy, θz] at node1 then node2.
+
+        For qy>0: v-end forces = [-qy*L/2, -qy*L/2], end moments about z = [-qy*L^2/12, +qy*L^2/12]
+        For qz>0: w-end forces = [-qz*L/2, -qz*L/2], end moments about y = [+qz*L^2/12, -qz*L^2/12]
+        """
         L = beam.length
         f_local = np.zeros(12)
         if q_local_y != 0:
@@ -183,7 +189,17 @@ class FrameAnalyzer:
         return f_local
 
     def _assign_dofs(self) -> Tuple[int, List[List[int]]]:
-        """Assigns degrees of freedom to all nodes and beams in the structure."""
+        """Assigns degrees of freedom to all nodes and beams in the structure.
+
+        CHANGE: rotational DOFs are now **shared per node** (rigid joint by default).
+        This ensures bending moments transfer through the joint unless you later
+        introduce explicit end releases.
+
+        Returns:
+            total_dofs: total number of active DOFs
+            beams_at_node: list mapping node index -> list of attached beam indices
+        """
+        # Map which beams meet at each node
         beams_at_node = [[] for _ in self.nodes]
         for b_idx, beam in enumerate(self.beams):
             beams_at_node[beam.node1_idx].append(b_idx)
@@ -191,43 +207,35 @@ class FrameAnalyzer:
 
         total_dofs = 0
         theta_dof_map = {}
-        # First, assign translational DOFs to each node
+
+        # 1) Translational DOFs per node (always unique)
         for n_idx, node in enumerate(self.nodes):
             node.dof_indices = [total_dofs, total_dofs + 1, total_dofs + 2]
             total_dofs += 3
 
-        # Second, assign rotational DOFs based on connectivity
+        # 2) Rotational DOFs per node (SHARED across all beams at that node)
         for n_idx, node in enumerate(self.nodes):
-            if not beams_at_node[n_idx]: continue
+            if not beams_at_node[n_idx]:
+                continue
+            shared_theta = [total_dofs, total_dofs + 1, total_dofs + 2]
+            total_dofs += 3
+            for b_idx in beams_at_node[n_idx]:
+                theta_dof_map[(n_idx, b_idx)] = shared_theta
 
-            beam_indices = beams_at_node[n_idx]
-            uf = _UnionFind(len(self.beams))
-            for conn in self.connections:
-                if conn.conn_type == 'rigid' and (conn.beam1_idx in beam_indices and conn.beam2_idx in beam_indices):
-                    uf.union(conn.beam1_idx, conn.beam2_idx)
-
-            components = {}
-            for b_idx in beam_indices:
-                root = uf.find(b_idx)
-                if root not in components:
-                    components[root] = [total_dofs, total_dofs + 1, total_dofs + 2]
-                    total_dofs += 3
-                theta_dof_map[(n_idx, b_idx)] = components[root]
-
-        # Finally, store the full 12 DOFs for each beam
+        # 3) Store the full 12 DOFs for each beam
         for b_idx, beam in enumerate(self.beams):
-            dof1 = self.nodes[beam.node1_idx].dof_indices + theta_dof_map.get((beam.node1_idx, b_idx), [-1,-1,-1])
-            dof2 = self.nodes[beam.node2_idx].dof_indices + theta_dof_map.get((beam.node2_idx, b_idx), [-1,-1,-1])
+            dof1 = self.nodes[beam.node1_idx].dof_indices + theta_dof_map.get((beam.node1_idx, b_idx), [-1, -1, -1])
+            dof2 = self.nodes[beam.node2_idx].dof_indices + theta_dof_map.get((beam.node2_idx, b_idx), [-1, -1, -1])
             beam.dof_indices = dof1 + dof2
 
         return total_dofs, beams_at_node
 
     def _assemble_system(self, loads: List[Dict], boundary_conditions: List[Dict]) -> Tuple[csr_matrix, np.ndarray]:
-        """Assembles the global stiffness matrix and force vector."""
         total_dofs, beams_at_node = self._assign_dofs()
         K = lil_matrix((total_dofs, total_dofs))
         F = np.zeros(total_dofs)
 
+        # compute props & assemble stiffness
         for beam in self.beams:
             self._compute_beam_properties(beam)
             k_local = self._local_stiffness_matrix(beam)
@@ -237,6 +245,9 @@ class FrameAnalyzer:
                 for j in range(12):
                     if beam.dof_indices[i] >= 0 and beam.dof_indices[j] >= 0:
                         K[beam.dof_indices[i], beam.dof_indices[j]] += k_global[i, j]
+
+            if not hasattr(beam, "_fe_local"):
+                beam._fe_local = np.zeros(12)
 
         for conn in self.connections:
             if conn.conn_type == 'spring' and conn.k_spring:
@@ -264,11 +275,18 @@ class FrameAnalyzer:
                         b_idx=beams_at_node[n_idx][0]
                         th_dofs=self.beams[b_idx].dof_indices[3:6] if self.beams[b_idx].node1_idx==n_idx else self.beams[b_idx].dof_indices[9:12]
                         F[th_dofs[0]]+=load.get('Mx',0); F[th_dofs[1]]+=load.get('My',0); F[th_dofs[2]]+=load.get('Mz',0)
+
             elif 'beam_idx' in load:
                 beam = self.beams[load['beam_idx']]
                 f_local = self._equivalent_nodal_loads(beam, load.get('qy',0), load.get('qz',0))
+
+                # NEW: remember the local fixed-end vector on this element
+                beam._fe_local += f_local
+
+                # assemble to global RHS (as you already did)
                 f_global = self._transformation_matrix(beam).T @ f_local
-                for i in range(12): F[beam.dof_indices[i]] += f_global[i]
+                for i in range(12):
+                    F[beam.dof_indices[i]] -= f_global[i]
 
         for bc in boundary_conditions:
             n_idx = bc['node_idx']
@@ -301,7 +319,10 @@ class FrameAnalyzer:
             T = self._transformation_matrix(beam)
             u_local = T @ self._displacements[dofs]
             k_local = self._local_stiffness_matrix(beam)
-            f_local = k_local @ u_local
+
+            # NEW: subtract the element's fixed-end actions (local) to get true end actions
+            fe_local = getattr(beam, "_fe_local", np.zeros(12))
+            f_local = k_local @ u_local - fe_local
 
             # --- Extract Internal Forces and Moments for Reporting ---
             # This convention produces results consistent with standard engineering diagrams

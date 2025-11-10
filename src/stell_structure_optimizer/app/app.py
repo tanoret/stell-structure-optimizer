@@ -402,7 +402,7 @@ def draw_sidebar():
                 gx = col_g1.number_input("Gravity X (m/s²)", value=0.0, step=0.1, format="%.2f", key="gravity_x")
                 gy = col_g2.number_input("Gravity Y (m/s²)", value=-9.81, step=0.1, format="%.2f", key="gravity_y")
                 gz = col_g3.number_input("Gravity Z (m/s²)", value=0.0, step=0.1, format="%.2f", key="gravity_z")
-                st.session_state.gravity_vector = [gx, gy, gz]
+                st.session_state.gravity_vector = [-gx, -gy, -gz]
                 st.markdown("**User-Defined Loads**")
                 load_pack_name = st.text_input("Load Pack Name", "Load Pack 1")
                 load_type = st.radio(
